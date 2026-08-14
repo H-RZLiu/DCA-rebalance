@@ -50,6 +50,33 @@
   .dot { width: 10px; height: 10px; border-radius: 4px; }
   .name { font-size: 15px; color: #3f3f46; }
   .pct { font-size: 13px; color: #a1a1aa; font-weight: 400; }
+  .pchip {
+    display: inline-flex;
+    align-items: center;
+    margin-left: 2px;
+    padding: 2px 8px;
+    background: #f4f4f5;
+    border-radius: 999px;
+    font-size: 12.5px;
+    font-weight: 600;
+    color: #71717a;
+    cursor: text;
+    transition: background .15s, box-shadow .15s;
+  }
+  .pchip:focus-within { background: #fff; box-shadow: inset 0 0 0 1.5px #18181b; }
+  .pctin {
+    font: inherit;
+    color: #18181b;
+    text-align: right;
+    background: transparent;
+    border: none;
+    outline: none;
+    padding: 0;
+    width: 2ch;
+  }
+  .pctin::-webkit-outer-spin-button, .pctin::-webkit-inner-spin-button { -webkit-appearance: none; }
+  .sumline { margin-top: 10px; font-size: 12.5px; color: #a1a1aa; text-align: right; }
+  .sumline.bad { color: #e5484d; font-weight: 500; }
   .val { font-size: 16px; font-weight: 600; font-variant-numeric: tabular-nums; }
   .bar {
     grid-column: 1 / -1;
@@ -155,6 +182,7 @@
   <h1>定投分配计算器</h1>
   <input class="amount" id="amount" type="number" min="0" placeholder="输入定投总金额" autofocus>
   <div id="list"></div>
+  <div class="sumline" id="sumline"></div>
   <button class="rec-btn" id="rec" disabled>记录本次定投</button>
   <div class="total">
     <div class="trow"><span>总成本 <span class="pct" id="count"></span></span><b id="cost">¥ 0</b></div>
@@ -176,15 +204,19 @@
     { name: "Nasdaq 100", pct: 10, color: "#4fb59b" },
   ];
   const fmt = n => "¥ " + n.toLocaleString("zh-CN", { maximumFractionDigits: 2 });
+  let pcts = {};
+  try { pcts = JSON.parse(localStorage.dcaPct) || {}; } catch {}
+  assets.forEach(a => { if (!(a.name in pcts)) pcts[a.name] = a.pct; });
+  const sumPct = () => assets.reduce((s, a) => s + pcts[a.name], 0);
   const pnlHtml = (d, base) =>
     `<b class="${d >= 0 ? "gain" : "loss"}">${d >= 0 ? "+" : "-"}${fmt(Math.abs(d))} (${d >= 0 ? "+" : "-"}${Math.abs(d / base * 100).toFixed(1)}%)</b>`;
 
   document.getElementById("list").innerHTML = assets.map((a, i) => `
     <div class="row">
       <span class="dot" style="background:${a.color}"></span>
-      <span class="name">${a.name} <span class="pct">${a.pct}%</span></span>
+      <span class="name">${a.name} <span class="pchip"><input class="pctin" id="pc${i}" type="number" min="0" max="100" step="1" value="${pcts[a.name]}">%</span></span>
       <span class="val" id="v${i}">—</span>
-      <div class="bar"><i style="width:${a.pct * 4}%;background:${a.color}"></i></div>
+      <div class="bar"><i id="b${i}" style="background:${a.color}"></i></div>
       <div class="stats" id="st${i}" hidden>
         <span>已投 <span id="c${i}"></span></span>
         <span>市值 <input id="m${i}" type="number" min="0" placeholder="未填"></span>
@@ -193,12 +225,30 @@
     </div>`).join("");
 
   const input = document.getElementById("amount"), recBtn = document.getElementById("rec");
-  input.addEventListener("input", () => {
-    const total = parseFloat(input.value);
-    recBtn.disabled = !(total > 0);
+  function updateCalc() {
+    const total = parseFloat(input.value), sum = sumPct(), ok = sum === 100;
+    recBtn.disabled = !(total > 0) || !ok;
     assets.forEach((a, i) => {
-      document.getElementById("v" + i).textContent = total > 0 ? fmt(total * a.pct / 100) : "—";
+      document.getElementById("v" + i).textContent = total > 0 && ok ? fmt(total * pcts[a.name] / 100) : "—";
+      document.getElementById("b" + i).style.width = Math.min(pcts[a.name] * 4, 100) + "%";
     });
+    const sl = document.getElementById("sumline");
+    sl.textContent = ok ? "比例合计 100%" : `比例合计 ${sum}% · 需为 100%`;
+    sl.className = "sumline" + (ok ? "" : " bad");
+  }
+  input.addEventListener("input", updateCalc);
+
+  const fitPct = el => el.style.width = Math.max(el.value.length, 1) + "ch";
+  assets.forEach((a, i) => {
+    const el = document.getElementById("pc" + i);
+    fitPct(el);
+    el.addEventListener("input", () => {
+      pcts[a.name] = Math.max(0, Math.min(100, Math.round(parseFloat(el.value) || 0)));
+      fitPct(el);
+      updateCalc();
+      render();
+    });
+    el.addEventListener("change", () => { el.value = pcts[a.name]; fitPct(el); });
   });
 
   let recs = [], mv = {};
@@ -206,10 +256,15 @@
   try { mv = JSON.parse(localStorage.dcaMv) || {}; } catch {}
 
   function render() {
-    try { localStorage.dca = JSON.stringify(recs); localStorage.dcaMv = JSON.stringify(mv); } catch {}
+    try {
+      localStorage.dca = JSON.stringify(recs);
+      localStorage.dcaMv = JSON.stringify(mv);
+      localStorage.dcaPct = JSON.stringify(pcts);
+    } catch {}
     const sums = {};
     recs.forEach(r => {
-      const split = r.s || Object.fromEntries(assets.map(a => [a.name, r.v * a.pct / 100]));
+      const p = r.p || pcts;
+      const split = r.s || Object.fromEntries(assets.map(a => [a.name, r.v * (p[a.name] || 0) / 100]));
       for (const k in split) sums[k] = (sums[k] || 0) + split[k];
     });
     let totMv = 0, totPnl = 0, hasMv = false;
@@ -261,7 +316,12 @@
 
   recBtn.addEventListener("click", () => {
     const v = parseFloat(input.value);
-    recs.push({ t: Date.now(), v, s: Object.fromEntries(assets.map(a => [a.name, v * a.pct / 100])), m: { ...mv } });
+    recs.push({
+      t: Date.now(), v,
+      p: { ...pcts },
+      s: Object.fromEntries(assets.map(a => [a.name, v * pcts[a.name] / 100])),
+      m: { ...mv },
+    });
     render();
   });
 
@@ -284,6 +344,15 @@
           recs = data;
           const last = recs[recs.length - 1];
           if (last && last.m) mv = { ...last.m };
+          if (last && last.p) {
+            pcts = { ...pcts, ...last.p };
+            assets.forEach((a, i) => {
+              const el = document.getElementById("pc" + i);
+              el.value = pcts[a.name];
+              fitPct(el);
+            });
+          }
+          updateCalc();
           render();
         }
       } catch { alert("文件格式不对，需要本工具导出的 JSON"); }
@@ -291,6 +360,7 @@
     };
     fr.readAsText(file.files[0]);
   });
+  updateCalc();
   render();
 </script>
 </body>
