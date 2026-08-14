@@ -25,6 +25,7 @@
     height: fit-content;
   }
   h1 { font-size: 19px; font-weight: 700; letter-spacing: .02em; margin-bottom: 24px; }
+  #list { display: flex; flex-direction: column; }
   .amount {
     width: 100%;
     font-size: 26px;
@@ -222,6 +223,12 @@
       document.getElementById("p" + i).innerHTML = m > 0 ? pnlHtml(m - cost, cost) : "";
       if (m > 0) { totMv += m; totPnl += m - cost; hasMv = true; }
     });
+    const rows = document.querySelectorAll("#list .row");
+    assets.map((a, i) => {
+      const cost = sums[a.name] || 0, m = mv[a.name];
+      return { i, y: m > 0 && cost > 0 ? (m - cost) / cost : -Infinity };
+    }).sort((a, b) => b.y - a.y || a.i - b.i)
+      .forEach((r, pos) => rows[r.i].style.order = pos);
     document.getElementById("cost").textContent = fmt(recs.reduce((s, r) => s + r.v, 0));
     document.getElementById("count").textContent = recs.length ? `共 ${recs.length} 次` : "暂无记录";
     document.getElementById("mrow").hidden = document.getElementById("prow").hidden = !hasMv;
