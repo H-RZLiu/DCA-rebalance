@@ -75,6 +75,20 @@
     width: 2ch;
   }
   .pctin::-webkit-outer-spin-button, .pctin::-webkit-inner-spin-button { -webkit-appearance: none; }
+  .quote {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 8px;
+    font-size: 12.5px;
+    color: #a1a1aa;
+    margin: -12px 0 20px;
+  }
+  .quote a { cursor: pointer; white-space: nowrap; }
+  .quote a:hover { color: #18181b; }
+  .dev { display: inline-block; font-size: 11.5px; color: #a1a1aa; margin-left: 4px; white-space: nowrap; }
+  .dev.hot { color: #e5484d; }
+  .dev.cold { color: #10a267; }
   .sumline { margin-top: 10px; font-size: 12.5px; color: #a1a1aa; text-align: right; }
   .sumline.bad { color: #e5484d; font-weight: 500; }
   .val { font-size: 16px; font-weight: 600; font-variant-numeric: tabular-nums; }
@@ -108,6 +122,7 @@
     transition: background .15s, border-color .15s;
   }
   .stats input:focus { background: #fff; border-color: #18181b; }
+  .stats[hidden] { display: none; }
   .gain { color: #10a267; }
   .loss { color: #e5484d; }
   .rec-btn {
@@ -180,6 +195,7 @@
 <body>
 <div class="card">
   <h1>定投分配计算器</h1>
+  <div class="quote" id="quote"></div>
   <input class="amount" id="amount" type="number" min="0" placeholder="输入定投总金额" autofocus>
   <div id="list"></div>
   <div class="sumline" id="sumline"></div>
@@ -195,18 +211,19 @@
   <input type="file" id="file" accept=".json" hidden>
 </div>
 <script>
+  // base: 基准比例（动态调整围绕它进行）；src: [接口, 代码]；step: 每偏离多少调 1 个百分点
   const assets = [
-    { name: "S&P 500",    pct: 25, color: "#7086f0" },
-    { name: "A500",       pct: 20, color: "#e8705f" },
-    { name: "恒生科技",    pct: 20, color: "#9d8cf0" },
-    { name: "BTC",        pct: 15, color: "#eda14f" },
-    { name: "黄金",        pct: 10, color: "#d9b84a" },
-    { name: "Nasdaq 100", pct: 10, color: "#4fb59b" },
+    { name: "S&P 500",    base: 25, color: "#7086f0", src: ["tx", "us.INX"],   step: 0.05 },
+    { name: "A500",       base: 20, color: "#e8705f", src: ["tx", "sh000510"], step: 0.05 },
+    { name: "恒生科技",    base: 20, color: "#9d8cf0", src: ["tx", "hkHSTECH"], step: 0.05 },
+    { name: "BTC",        base: 15, color: "#eda14f", src: ["bn", "BTCUSDT"],  step: 0.10 },
+    { name: "黄金",        base: 10, color: "#d9b84a", src: ["tx", "sh518880"], step: 0.05 },
+    { name: "Nasdaq 100", base: 10, color: "#4fb59b", src: ["tx", "us.NDX"],   step: 0.05 },
   ];
   const fmt = n => "¥ " + n.toLocaleString("zh-CN", { maximumFractionDigits: 2 });
   let pcts = {};
   try { pcts = JSON.parse(localStorage.dcaPct) || {}; } catch {}
-  assets.forEach(a => { if (!(a.name in pcts)) pcts[a.name] = a.pct; });
+  assets.forEach(a => { if (!(a.name in pcts)) pcts[a.name] = a.base; });
   const sumPct = () => assets.reduce((s, a) => s + pcts[a.name], 0);
   const pnlHtml = (d, base) =>
     `<b class="${d >= 0 ? "gain" : "loss"}">${d >= 0 ? "+" : "-"}${fmt(Math.abs(d))} (${d >= 0 ? "+" : "-"}${Math.abs(d / base * 100).toFixed(1)}%)</b>`;
@@ -214,7 +231,7 @@
   document.getElementById("list").innerHTML = assets.map((a, i) => `
     <div class="row">
       <span class="dot" style="background:${a.color}"></span>
-      <span class="name">${a.name} <span class="pchip"><input class="pctin" id="pc${i}" type="number" min="0" max="100" step="1" value="${pcts[a.name]}">%</span></span>
+      <span class="name">${a.name} <span class="pchip"><input class="pctin" id="pc${i}" type="number" min="0" max="100" step="1" value="${pcts[a.name]}">%</span> <span class="dev" id="d${i}"></span></span>
       <span class="val" id="v${i}">—</span>
       <div class="bar"><i id="b${i}" style="background:${a.color}"></i></div>
       <div class="stats" id="st${i}" hidden>
@@ -321,9 +338,111 @@
       p: { ...pcts },
       s: Object.fromEntries(assets.map(a => [a.name, v * pcts[a.name] / 100])),
       m: { ...mv },
+      d: Object.fromEntries(assets.filter(a => devs[a.name] != null).map(a => [a.name, +(devs[a.name] * 100).toFixed(1)])),
     });
     render();
   });
+
+  // ── 行情与动态比例：现价相对自身200日均线的偏离，涨多减配、跌多加配 ──
+  const BASES = assets.map(a => a.base).join("/");
+  let devs = {}, sugg = null;
+
+  async function fetchCloses(a) {
+    const [api, code] = a.src, signal = AbortSignal.timeout(10000);
+    let rows, ci;
+    if (api === "bn") {
+      rows = await (await fetch(`https://api.binance.com/api/v3/klines?symbol=${code}&interval=1d&limit=220`, { signal })).json();
+      ci = 4;
+    } else {
+      const d = (await (await fetch(`https://web.ifzq.gtimg.cn/appstock/app/fqkline/get?param=${code},day,,,320,qfq`, { signal })).json()).data[code];
+      rows = d.day || d.qfqday;
+      ci = 2;
+    }
+    const raw = rows.map(r => parseFloat(r[ci])).filter(c => isFinite(c) && c > 0);
+    // 盘中最后一根K线偶见错乱数据：与上一保留值跳变超35%的行丢弃
+    let prev = raw.slice(0, 10).sort((x, y) => x - y)[Math.floor(Math.min(10, raw.length) / 2)];
+    const closes = [];
+    for (const c of raw) {
+      if (Math.abs(c / prev - 1) > 0.35) continue;
+      closes.push(c);
+      prev = c;
+    }
+    if (closes.length < 200) throw new Error(code);
+    return closes;
+  }
+
+  function suggest() {
+    const prelim = assets.map(a => {
+      const d = devs[a.name];
+      let tilt = 0;
+      if (d != null) {
+        const r = -d / a.step;
+        tilt = Math.sign(r) * Math.min(3, Math.round(Math.abs(r)));
+      }
+      return Math.max(a.base + tilt, 1);
+    });
+    const sum = prelim.reduce((s, x) => s + x, 0);
+    // 最大余数法缩放到合计恰为 100 的整数
+    const exact = prelim.map(x => x * 100 / sum);
+    const out = exact.map(Math.floor);
+    const left = 100 - out.reduce((s, x) => s + x, 0);
+    exact.map((x, i) => ({ i, f: x - out[i] }))
+      .sort((p, q) => q.f - p.f || assets[q.i].base - assets[p.i].base)
+      .slice(0, left)
+      .forEach(p => out[p.i]++);
+    return Object.fromEntries(assets.map((a, i) => [a.name, out[i]]));
+  }
+
+  function renderDevs() {
+    assets.forEach((a, i) => {
+      const el = document.getElementById("d" + i), d = devs[a.name];
+      if (d == null) {
+        el.className = "dev";
+        el.textContent = a.name in devs ? "行情未获取" : "";
+      } else {
+        const abs = Math.abs(d * 100), v = abs.toFixed(abs >= 10 ? 0 : 1);
+        const zero = parseFloat(v) === 0;
+        el.className = "dev " + (zero ? "" : d >= 0 ? "hot" : "cold");
+        const chg = sugg && sugg[a.name] !== a.base ? ` · ${a.base}→${sugg[a.name]}` : "";
+        el.textContent = `距200日线 ${zero ? "0%" : (d >= 0 ? "+" : "-") + v + "%"}${chg}`;
+      }
+    });
+  }
+
+  async function refreshQuotes() {
+    const q = document.getElementById("quote");
+    q.textContent = "获取行情中…";
+    const res = await Promise.allSettled(assets.map(fetchCloses));
+    devs = {};
+    let ok = 0;
+    res.forEach((r, i) => {
+      const a = assets[i];
+      if (r.status === "fulfilled") {
+        const closes = r.value, ma = closes.slice(-200).reduce((s, x) => s + x, 0) / 200;
+        devs[a.name] = closes[closes.length - 1] / ma - 1;
+        ok++;
+      } else devs[a.name] = null;
+    });
+    let msg;
+    if (ok) {
+      sugg = suggest();
+      pcts = { ...sugg };
+      assets.forEach((a, i) => {
+        const el = document.getElementById("pc" + i);
+        el.value = pcts[a.name];
+        fitPct(el);
+      });
+      msg = ok === assets.length ? `已按行情调整 · 基准 ${BASES}` : `已按行情调整（${assets.length - ok} 项行情未获取，按基准）`;
+    } else {
+      sugg = null;
+      msg = "行情获取失败，沿用当前比例";
+    }
+    q.innerHTML = `<span>${msg}</span><a id="qr" title="重新获取行情">↻ 刷新</a>`;
+    document.getElementById("qr").onclick = refreshQuotes;
+    renderDevs();
+    updateCalc();
+    render();
+  }
 
   const file = document.getElementById("file");
   document.getElementById("exp").addEventListener("click", () => {
@@ -362,6 +481,7 @@
   });
   updateCalc();
   render();
+  refreshQuotes();
 </script>
 </body>
 </html>
