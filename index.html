@@ -103,12 +103,15 @@
   .stats {
     grid-column: 1 / -1;
     display: flex;
+    flex-wrap: wrap;
     justify-content: space-between;
     align-items: center;
+    gap: 4px 10px;
     font-size: 12.5px;
     color: #a1a1aa;
     font-variant-numeric: tabular-nums;
   }
+  .warn { color: #e5484d; font-weight: 600; }
   .stats input {
     width: 84px;
     font: inherit;
@@ -166,12 +169,13 @@
     transition: transform .2s;
   }
   .hist-head.open i { transform: rotate(180deg); }
-  #hist {
+  #hist, #rv {
     max-height: 0;
     overflow: hidden;
     transition: max-height .25s ease;
   }
   #hist.open { max-height: 200px; overflow-y: auto; }
+  #rv.open { max-height: 260px; }
   #hist::-webkit-scrollbar { width: 4px; }
   #hist::-webkit-scrollbar-thumb { background: #e4e4e7; border-radius: 2px; }
   .hrow {
@@ -207,22 +211,26 @@
   </div>
   <div class="hist-head" id="histHead" hidden><span id="histLabel">历史记录</span><i>▾</i></div>
   <div id="hist"></div>
+  <div class="hist-head" id="rvHead" hidden><span>复盘 · 动态比例 vs 固定基准</span><i>▾</i></div>
+  <div id="rv"></div>
   <div class="io"><a id="exp">⬇ 导出 JSON</a><a id="imp">⬆ 导入 JSON</a></div>
   <input type="file" id="file" accept=".json" hidden>
 </div>
 <script>
   // base: 基准比例（动态调整围绕它进行）；src: [接口, 代码]；step: 每偏离多少调 1 个百分点
   const assets = [
-    { name: "S&P 500",    base: 25, color: "#7086f0", src: ["tx", "us.INX"],   step: 0.05 },
+    { name: "S&P 500",    base: 30, color: "#7086f0", src: ["tx", "us.INX"],   step: 0.05 },
     { name: "A500",       base: 20, color: "#e8705f", src: ["tx", "sh000510"], step: 0.05 },
     { name: "恒生科技",    base: 15, color: "#9d8cf0", src: ["tx", "hkHSTECH"], step: 0.05 },
     { name: "BTC",        base: 20, color: "#eda14f", src: ["bn", "BTCUSDT"],  step: 0.10 },
-    { name: "黄金",        base: 10, color: "#d9b84a", src: ["tx", "sh518880"], step: 0.05 },
-    { name: "Nasdaq 100", base: 10, color: "#4fb59b", src: ["tx", "us.NDX"],   step: 0.05 },
+    { name: "黄金",        base: 15, color: "#d9b84a", src: ["tx", "sh518880"], step: 0.05 },
   ];
   const fmt = n => "¥ " + n.toLocaleString("zh-CN", { maximumFractionDigits: 2 });
   let pcts = {};
   try { pcts = JSON.parse(localStorage.dcaPct) || {}; } catch {}
+  // 清掉已下架资产的残留键（历史记录 recs 保持原样不动）
+  const prune = o => { for (const k in o) if (!assets.some(a => a.name === k)) delete o[k]; };
+  prune(pcts);
   assets.forEach(a => { if (!(a.name in pcts)) pcts[a.name] = a.base; });
   const sumPct = () => assets.reduce((s, a) => s + pcts[a.name], 0);
   const pnlHtml = (d, base) =>
@@ -237,6 +245,7 @@
       <div class="stats" id="st${i}" hidden>
         <span>已投 <span id="c${i}"></span></span>
         <span>市值 <input id="m${i}" type="number" min="0" placeholder="未填"></span>
+        <span id="w${i}"></span>
         <span id="p${i}"></span>
       </div>
     </div>`).join("");
@@ -246,7 +255,7 @@
     const total = parseFloat(input.value), sum = sumPct(), ok = sum === 100;
     recBtn.disabled = !(total > 0) || !ok;
     assets.forEach((a, i) => {
-      document.getElementById("v" + i).textContent = total > 0 && ok ? fmt(total * pcts[a.name] / 100) : "—";
+      document.getElementById("v" + i).textContent = total > 0 && ok && pcts[a.name] > 0 ? fmt(total * pcts[a.name] / 100) : "—";
       document.getElementById("b" + i).style.width = Math.min(pcts[a.name] * 4, 100) + "%";
     });
     const sl = document.getElementById("sumline");
@@ -271,6 +280,7 @@
   let recs = [], mv = {};
   try { recs = JSON.parse(localStorage.dca) || []; } catch {}
   try { mv = JSON.parse(localStorage.dcaMv) || {}; } catch {}
+  prune(mv);
 
   function render() {
     try {
@@ -295,6 +305,16 @@
       document.getElementById("p" + i).innerHTML = m > 0 ? pnlHtml(m - cost, cost) : "";
       if (m > 0) { totMv += m; totPnl += m - cost; hasMv = true; }
     });
+    // 持仓占比 vs 基准目标（目标按已填市值的资产归一化），偏离≥5个点标红
+    const mvBaseSum = assets.reduce((s, a) => s + (mv[a.name] > 0 ? a.base : 0), 0);
+    assets.forEach((a, i) => {
+      const m = mv[a.name], el = document.getElementById("w" + i);
+      if (!(m > 0) || !totMv || !mvBaseSum) { el.textContent = ""; return; }
+      const share = m / totMv * 100, target = a.base / mvBaseSum * 100;
+      // 停投资产只展示占比，不设目标、不告警
+      el.textContent = a.base ? `占 ${share.toFixed(0)}% · 目标 ${target.toFixed(0)}%` : `占 ${share.toFixed(0)}%`;
+      el.className = a.base && Math.abs(share - target) >= 5 ? "warn" : "";
+    });
     const rows = document.querySelectorAll("#list .row");
     assets.map((a, i) => {
       const cost = sums[a.name] || 0, m = mv[a.name];
@@ -302,13 +322,23 @@
     }).sort((a, b) => b.y - a.y || a.i - b.i)
       .forEach((r, pos) => rows[r.i].style.order = pos);
     document.getElementById("cost").textContent = fmt(recs.reduce((s, r) => s + r.v, 0));
-    document.getElementById("count").textContent = recs.length ? `共 ${recs.length} 次` : "暂无记录";
+    // 定投节奏：距上次天数，超过历史中位间隔的1.5倍标红
+    const countEl = document.getElementById("count");
+    if (recs.length) {
+      const times = recs.map(r => r.t).sort((a, b) => a - b);
+      const days = Math.floor((Date.now() - times[times.length - 1]) / 864e5);
+      const gaps = times.slice(1).map((t, i) => (t - times[i]) / 864e5).filter(g => g >= 1).sort((a, b) => a - b);
+      const med = gaps.length ? gaps[Math.floor(gaps.length / 2)] : 30;
+      const late = days > Math.max(med * 1.5, 7);
+      countEl.innerHTML = `共 ${recs.length} 次 · <span class="${late ? "warn" : ""}">距上次 ${days} 天</span>`;
+    } else countEl.textContent = "暂无记录";
     document.getElementById("mrow").hidden = document.getElementById("prow").hidden = !hasMv;
     if (hasMv) {
       document.getElementById("mkt").textContent = fmt(totMv);
       document.getElementById("pnl").innerHTML = pnlHtml(totPnl, totMv - totPnl);
     }
     document.getElementById("histHead").hidden = !recs.length;
+    document.getElementById("rvHead").hidden = !recs.length;
     document.getElementById("histLabel").textContent = `历史记录 · ${recs.length} 条`;
     document.getElementById("hist").innerHTML = recs.map((r, i) => `
       <div class="hrow" title="${new Date(r.t).toLocaleString("zh-CN", { dateStyle: "short", timeStyle: "short" })}">
@@ -321,6 +351,11 @@
   document.getElementById("histHead").addEventListener("click", e => {
     e.currentTarget.classList.toggle("open");
     document.getElementById("hist").classList.toggle("open");
+  });
+  document.getElementById("rvHead").addEventListener("click", e => {
+    renderReview();
+    e.currentTarget.classList.toggle("open");
+    document.getElementById("rv").classList.toggle("open");
   });
 
   assets.forEach((a, i) => {
@@ -345,34 +380,79 @@
 
   // ── 行情与动态比例：现价相对自身200日均线的偏离，涨多减配、跌多加配 ──
   const BASES = assets.map(a => a.base).join("/");
-  let devs = {}, sugg = null;
+  let devs = {}, sugg = null, klines = {};
 
   async function fetchCloses(a) {
     const [api, code] = a.src, signal = AbortSignal.timeout(10000);
-    let rows, ci;
+    let rows, ci, dateOf;
     if (api === "bn") {
       rows = await (await fetch(`https://api.binance.com/api/v3/klines?symbol=${code}&interval=1d&limit=220`, { signal })).json();
       ci = 4;
+      dateOf = r => new Date(r[0]).toISOString().slice(0, 10);
     } else {
       const d = (await (await fetch(`https://web.ifzq.gtimg.cn/appstock/app/fqkline/get?param=${code},day,,,320,qfq`, { signal })).json()).data[code];
       rows = d.day || d.qfqday;
       ci = 2;
+      dateOf = r => r[0];
     }
-    const raw = rows.map(r => parseFloat(r[ci])).filter(c => isFinite(c) && c > 0);
+    const raw = rows.map(r => [dateOf(r), parseFloat(r[ci])]).filter(p => isFinite(p[1]) && p[1] > 0);
     // 盘中最后一根K线偶见错乱数据：与上一保留值跳变超35%的行丢弃
-    let prev = raw.slice(0, 10).sort((x, y) => x - y)[Math.floor(Math.min(10, raw.length) / 2)];
-    const closes = [];
-    for (const c of raw) {
-      if (Math.abs(c / prev - 1) > 0.35) continue;
-      closes.push(c);
-      prev = c;
+    const seed = raw.slice(0, 10).map(p => p[1]).sort((x, y) => x - y);
+    let prev = seed[Math.floor(seed.length / 2)];
+    const pairs = [];
+    for (const p of raw) {
+      if (Math.abs(p[1] / prev - 1) > 0.35) continue;
+      pairs.push(p);
+      prev = p[1];
     }
-    if (closes.length < 200) throw new Error(code);
-    return closes;
+    if (pairs.length < 200) throw new Error(code);
+    return pairs;
+  }
+
+  // 某资产在时间 t（本地日期）当天或之前最近一个交易日的收盘价
+  function priceAt(name, t) {
+    const k = klines[name];
+    if (!k) return null;
+    const d = new Date(t);
+    const key = `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}-${String(d.getDate()).padStart(2, "0")}`;
+    for (let i = k.length - 1; i >= 0; i--) if (k[i][0] <= key) return k[i][1];
+    return null;
+  }
+
+  // 复盘：每笔记录按当时指数点位折算到现在，动态分配 vs 固定基准各值多少钱
+  function renderReview() {
+    const el = document.getElementById("rv");
+    const missing = assets.filter(a => !klines[a.name]).map(a => a.name);
+    if (missing.length) {
+      el.innerHTML = `<div class="hrow">复盘需要全部资产行情（缺 ${missing.join("、")}）</div>`;
+      return;
+    }
+    let dyn = 0, fix = 0, used = 0, skipped = 0;
+    for (const r of recs) {
+      const p = r.p || pcts;
+      const split = r.s || Object.fromEntries(assets.map(a => [a.name, r.v * (p[a.name] || 0) / 100]));
+      if (assets.some(a => !(priceAt(a.name, r.t) > 0))) { skipped++; continue; }
+      used++;
+      // 老记录可能含已下架资产的份额：两边都只按现存资产的实投金额对比，口径一致
+      const vEff = assets.reduce((s, a) => s + (split[a.name] || 0), 0);
+      for (const a of assets) {
+        const k = klines[a.name], ratio = k[k.length - 1][1] / priceAt(a.name, r.t);
+        dyn += (split[a.name] || 0) * ratio;
+        fix += vEff * a.base / 100 * ratio;
+      }
+    }
+    const diff = dyn - fix;
+    el.innerHTML = used ? `
+      <div class="hrow"><span>动态比例买入现值</span><b>${fmt(dyn)}</b></div>
+      <div class="hrow"><span>固定基准买入现值</span><b>${fmt(fix)}</b></div>
+      <div class="hrow"><span>动态 − 固定</span>${pnlHtml(diff, fix)}</div>
+      <div class="hrow"><span>计入 ${used} 笔${skipped ? ` · ${skipped} 笔超出行情范围未计` : ""} · 按指数近似，不含费率/汇率</span></div>`
+      : `<div class="hrow">记录都超出行情数据范围（约近一年内可复盘）</div>`;
   }
 
   function suggest() {
     const prelim = assets.map(a => {
+      if (!a.base) return 0; // 停投资产不参与动态调整
       const d = devs[a.name];
       let tilt = 0;
       if (d != null) {
@@ -418,7 +498,8 @@
     res.forEach((r, i) => {
       const a = assets[i];
       if (r.status === "fulfilled") {
-        const closes = r.value, ma = closes.slice(-200).reduce((s, x) => s + x, 0) / 200;
+        klines[a.name] = r.value;
+        const closes = r.value.map(p => p[1]), ma = closes.slice(-200).reduce((s, x) => s + x, 0) / 200;
         devs[a.name] = closes[closes.length - 1] / ma - 1;
         ok++;
       } else devs[a.name] = null;
@@ -442,6 +523,7 @@
     renderDevs();
     updateCalc();
     render();
+    if (document.getElementById("rv").classList.contains("open")) renderReview();
   }
 
   const file = document.getElementById("file");
@@ -462,9 +544,10 @@
         if (!recs.length || confirm(`导入将覆盖当前 ${recs.length} 条记录，继续？`)) {
           recs = data;
           const last = recs[recs.length - 1];
-          if (last && last.m) mv = { ...last.m };
+          if (last && last.m) { mv = { ...last.m }; prune(mv); }
           if (last && last.p) {
             pcts = { ...pcts, ...last.p };
+            prune(pcts);
             assets.forEach((a, i) => {
               const el = document.getElementById("pc" + i);
               el.value = pcts[a.name];
