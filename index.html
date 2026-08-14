@@ -1,0 +1,194 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>定投计算器</title>
+<style>
+  * { margin: 0; padding: 0; box-sizing: border-box; }
+  body {
+    font-family: -apple-system, "PingFang SC", "Microsoft YaHei", sans-serif;
+    background: #f4f5f7;
+    min-height: 100vh;
+    display: flex;
+    justify-content: center;
+    padding: 48px 16px;
+  }
+  .card {
+    background: #fff;
+    border-radius: 20px;
+    box-shadow: 0 8px 30px rgba(0,0,0,.06);
+    padding: 36px 32px;
+    width: 100%;
+    max-width: 440px;
+    height: fit-content;
+  }
+  h1 { font-size: 20px; margin-bottom: 24px; }
+  .amount {
+    width: 100%;
+    font-size: 28px;
+    font-weight: 600;
+    padding: 14px 16px;
+    border: 2px solid #e5e7eb;
+    border-radius: 12px;
+    outline: none;
+    margin-bottom: 28px;
+  }
+  .amount:focus { border-color: #6366f1; }
+  .row {
+    display: grid;
+    grid-template-columns: 12px 1fr auto;
+    align-items: center;
+    gap: 12px;
+    padding: 12px 0;
+    border-bottom: 1px solid #f0f1f3;
+  }
+  .dot { width: 12px; height: 12px; border-radius: 50%; }
+  .name { font-size: 15px; color: #374151; }
+  .pct { font-size: 13px; color: #9ca3af; }
+  .val { font-size: 16px; font-weight: 600; font-variant-numeric: tabular-nums; }
+  .col { display: flex; flex-direction: column; align-items: flex-end; }
+  .sub { font-size: 12px; color: #9ca3af; font-variant-numeric: tabular-nums; }
+  .bar {
+    grid-column: 1 / -1;
+    height: 5px;
+    border-radius: 3px;
+    background: #f0f1f3;
+    overflow: hidden;
+  }
+  .bar i { display: block; height: 100%; border-radius: 3px; }
+  .rec-btn {
+    width: 100%;
+    margin-top: 24px;
+    padding: 14px;
+    font-size: 16px;
+    font-weight: 600;
+    color: #fff;
+    background: #6366f1;
+    border: none;
+    border-radius: 12px;
+    cursor: pointer;
+  }
+  .rec-btn:hover { background: #4f46e5; }
+  .rec-btn:disabled { background: #c7c9f4; cursor: not-allowed; }
+  .total {
+    display: flex;
+    justify-content: space-between;
+    align-items: baseline;
+    margin: 28px 0 8px;
+    padding-top: 20px;
+    border-top: 2px solid #f0f1f3;
+  }
+  .total b { font-size: 22px; font-variant-numeric: tabular-nums; }
+  .total span { font-size: 13px; color: #9ca3af; }
+  .hrow {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    gap: 10px;
+    padding: 9px 0;
+    font-size: 14px;
+    color: #6b7280;
+    border-bottom: 1px solid #f7f8f9;
+  }
+  .hrow b { color: #374151; font-variant-numeric: tabular-nums; margin-left: auto; }
+  .hrow a { color: #d1d5db; cursor: pointer; font-size: 17px; padding: 0 4px; }
+  .hrow a:hover { color: #ef4444; }
+  .io { display: flex; justify-content: center; gap: 24px; margin-top: 20px; font-size: 13px; color: #9ca3af; }
+  .io a { cursor: pointer; }
+  .io a:hover { color: #6366f1; }
+</style>
+</head>
+<body>
+<div class="card">
+  <h1>💰 定投分配计算器</h1>
+  <input class="amount" id="amount" type="number" min="0" placeholder="输入定投总金额" autofocus>
+  <div id="list"></div>
+  <button class="rec-btn" id="rec" disabled>📝 记录本次定投</button>
+  <div class="total">总成本 <b id="cost">¥ 0</b><span id="count"></span></div>
+  <div id="hist"></div>
+  <div class="io"><a id="exp">⬇ 导出 JSON</a><a id="imp">⬆ 导入 JSON</a></div>
+  <input type="file" id="file" accept=".json" hidden>
+</div>
+<script>
+  const assets = [
+    { name: "S&P 500",    pct: 25, color: "#6366f1" },
+    { name: "A500",       pct: 20, color: "#ef4444" },
+    { name: "恒生科技",    pct: 20, color: "#8b5cf6" },
+    { name: "BTC",        pct: 15, color: "#f59e0b" },
+    { name: "黄金",        pct: 10, color: "#eab308" },
+    { name: "Nasdaq 100", pct: 10, color: "#10b981" },
+  ];
+  const fmt = n => "¥ " + n.toLocaleString("zh-CN", { maximumFractionDigits: 2 });
+
+  document.getElementById("list").innerHTML = assets.map((a, i) => `
+    <div class="row">
+      <span class="dot" style="background:${a.color}"></span>
+      <span class="name">${a.name} <span class="pct">${a.pct}%</span></span>
+      <div class="col"><span class="val" id="v${i}">—</span><span class="sub" id="s${i}"></span></div>
+      <div class="bar"><i style="width:${a.pct * 4}%;background:${a.color}"></i></div>
+    </div>`).join("");
+
+  const input = document.getElementById("amount"), recBtn = document.getElementById("rec");
+  input.addEventListener("input", () => {
+    const total = parseFloat(input.value);
+    recBtn.disabled = !(total > 0);
+    assets.forEach((a, i) => {
+      document.getElementById("v" + i).textContent = total > 0 ? fmt(total * a.pct / 100) : "—";
+    });
+  });
+
+  let recs = [];
+  try { recs = JSON.parse(localStorage.dca) || []; } catch {}
+
+  function render() {
+    try { localStorage.dca = JSON.stringify(recs); } catch {}
+    const sums = {};
+    recs.forEach(r => {
+      const split = r.s || Object.fromEntries(assets.map(a => [a.name, r.v * a.pct / 100]));
+      for (const k in split) sums[k] = (sums[k] || 0) + split[k];
+    });
+    assets.forEach((a, i) => {
+      document.getElementById("s" + i).textContent = sums[a.name] ? "已投 " + fmt(sums[a.name]) : "";
+    });
+    document.getElementById("cost").textContent = fmt(recs.reduce((s, r) => s + r.v, 0));
+    document.getElementById("count").textContent = recs.length ? `共 ${recs.length} 次` : "暂无记录";
+    document.getElementById("hist").innerHTML = recs.map((r, i) => `
+      <div class="hrow">
+        <span>${new Date(r.t).toLocaleString("zh-CN", { dateStyle: "short", timeStyle: "short" })}</span>
+        <b>${fmt(r.v)}</b><a onclick="del(${i})" title="删除">×</a>
+      </div>`).reverse().join("");
+  }
+  function del(i) { recs.splice(i, 1); render(); }
+
+  recBtn.addEventListener("click", () => {
+    const v = parseFloat(input.value);
+    recs.push({ t: Date.now(), v, s: Object.fromEntries(assets.map(a => [a.name, v * a.pct / 100])) });
+    render();
+  });
+
+  const file = document.getElementById("file");
+  document.getElementById("exp").addEventListener("click", () => {
+    const a = document.createElement("a");
+    a.href = URL.createObjectURL(new Blob([JSON.stringify(recs, null, 2)], { type: "application/json" }));
+    a.download = `定投记录-${new Date().toISOString().slice(0, 10)}.json`;
+    a.click();
+    URL.revokeObjectURL(a.href);
+  });
+  document.getElementById("imp").addEventListener("click", () => file.click());
+  file.addEventListener("change", () => {
+    const fr = new FileReader();
+    fr.onload = () => {
+      try {
+        const data = JSON.parse(fr.result);
+        if (!Array.isArray(data) || data.some(r => typeof r.t !== "number" || typeof r.v !== "number")) throw 0;
+        if (!recs.length || confirm(`导入将覆盖当前 ${recs.length} 条记录，继续？`)) { recs = data; render(); }
+      } catch { alert("文件格式不对，需要本工具导出的 JSON"); }
+      file.value = "";
+    };
+    fr.readAsText(file.files[0]);
+  });
+  render();
+</script>
+</body>
+</html>
