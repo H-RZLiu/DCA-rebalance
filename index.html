@@ -20,7 +20,7 @@
     box-shadow: 0 8px 30px rgba(0,0,0,.06);
     padding: 36px 32px;
     width: 100%;
-    max-width: 440px;
+    max-width: 460px;
     height: fit-content;
   }
   h1 { font-size: 20px; margin-bottom: 24px; }
@@ -39,16 +39,14 @@
     display: grid;
     grid-template-columns: 12px 1fr auto;
     align-items: center;
-    gap: 12px;
+    gap: 10px 12px;
     padding: 12px 0;
     border-bottom: 1px solid #f0f1f3;
   }
   .dot { width: 12px; height: 12px; border-radius: 50%; }
   .name { font-size: 15px; color: #374151; }
-  .pct { font-size: 13px; color: #9ca3af; }
+  .pct { font-size: 13px; color: #9ca3af; font-weight: 400; }
   .val { font-size: 16px; font-weight: 600; font-variant-numeric: tabular-nums; }
-  .col { display: flex; flex-direction: column; align-items: flex-end; }
-  .sub { font-size: 12px; color: #9ca3af; font-variant-numeric: tabular-nums; }
   .bar {
     grid-column: 1 / -1;
     height: 5px;
@@ -57,6 +55,28 @@
     overflow: hidden;
   }
   .bar i { display: block; height: 100%; border-radius: 3px; }
+  .stats {
+    grid-column: 1 / -1;
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    font-size: 12.5px;
+    color: #9ca3af;
+    font-variant-numeric: tabular-nums;
+  }
+  .stats input {
+    width: 84px;
+    font: inherit;
+    color: #374151;
+    text-align: right;
+    padding: 3px 6px;
+    border: 1px solid #e5e7eb;
+    border-radius: 6px;
+    outline: none;
+  }
+  .stats input:focus { border-color: #6366f1; }
+  .gain { color: #ef4444; }
+  .loss { color: #10b981; }
   .rec-btn {
     width: 100%;
     margin-top: 24px;
@@ -71,28 +91,52 @@
   }
   .rec-btn:hover { background: #4f46e5; }
   .rec-btn:disabled { background: #c7c9f4; cursor: not-allowed; }
-  .total {
+  .total { margin: 28px 0 8px; padding-top: 14px; border-top: 2px solid #f0f1f3; }
+  .trow {
     display: flex;
     justify-content: space-between;
     align-items: baseline;
-    margin: 28px 0 8px;
-    padding-top: 20px;
-    border-top: 2px solid #f0f1f3;
+    padding: 4px 0;
+    font-size: 14px;
+    color: #6b7280;
   }
-  .total b { font-size: 22px; font-variant-numeric: tabular-nums; }
-  .total span { font-size: 13px; color: #9ca3af; }
+  .trow b { font-size: 18px; color: #111827; font-variant-numeric: tabular-nums; }
+  .trow #cost { font-size: 22px; }
+  .hist-head {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    padding: 10px 0 6px;
+    font-size: 13px;
+    color: #9ca3af;
+    cursor: pointer;
+    user-select: none;
+  }
+  .hist-head i {
+    font-style: normal;
+    transition: transform .2s;
+  }
+  .hist-head.open i { transform: rotate(180deg); }
+  #hist {
+    max-height: 0;
+    overflow: hidden;
+    transition: max-height .25s ease;
+  }
+  #hist.open { max-height: 200px; overflow-y: auto; }
+  #hist::-webkit-scrollbar { width: 4px; }
+  #hist::-webkit-scrollbar-thumb { background: #e5e7eb; border-radius: 2px; }
   .hrow {
     display: flex;
     justify-content: space-between;
     align-items: center;
     gap: 10px;
-    padding: 9px 0;
-    font-size: 14px;
-    color: #6b7280;
+    padding: 7px 0;
+    font-size: 13px;
+    color: #9ca3af;
     border-bottom: 1px solid #f7f8f9;
   }
-  .hrow b { color: #374151; font-variant-numeric: tabular-nums; margin-left: auto; }
-  .hrow a { color: #d1d5db; cursor: pointer; font-size: 17px; padding: 0 4px; }
+  .hrow b { color: #6b7280; font-weight: 500; font-variant-numeric: tabular-nums; margin-left: auto; }
+  .hrow a { color: #d1d5db; cursor: pointer; font-size: 16px; padding: 0 4px; }
   .hrow a:hover { color: #ef4444; }
   .io { display: flex; justify-content: center; gap: 24px; margin-top: 20px; font-size: 13px; color: #9ca3af; }
   .io a { cursor: pointer; }
@@ -105,7 +149,12 @@
   <input class="amount" id="amount" type="number" min="0" placeholder="输入定投总金额" autofocus>
   <div id="list"></div>
   <button class="rec-btn" id="rec" disabled>📝 记录本次定投</button>
-  <div class="total">总成本 <b id="cost">¥ 0</b><span id="count"></span></div>
+  <div class="total">
+    <div class="trow"><span>总成本 <span class="pct" id="count"></span></span><b id="cost">¥ 0</b></div>
+    <div class="trow" id="mrow" hidden><span>总市值</span><b id="mkt"></b></div>
+    <div class="trow" id="prow" hidden><span>总收益</span><b id="pnl"></b></div>
+  </div>
+  <div class="hist-head" id="histHead" hidden><span id="histLabel">历史记录</span><i>▾</i></div>
   <div id="hist"></div>
   <div class="io"><a id="exp">⬇ 导出 JSON</a><a id="imp">⬆ 导入 JSON</a></div>
   <input type="file" id="file" accept=".json" hidden>
@@ -120,13 +169,20 @@
     { name: "Nasdaq 100", pct: 10, color: "#10b981" },
   ];
   const fmt = n => "¥ " + n.toLocaleString("zh-CN", { maximumFractionDigits: 2 });
+  const pnlHtml = (d, base) =>
+    `<b class="${d >= 0 ? "gain" : "loss"}">${d >= 0 ? "+" : "-"}${fmt(Math.abs(d))} (${d >= 0 ? "+" : "-"}${Math.abs(d / base * 100).toFixed(1)}%)</b>`;
 
   document.getElementById("list").innerHTML = assets.map((a, i) => `
     <div class="row">
       <span class="dot" style="background:${a.color}"></span>
       <span class="name">${a.name} <span class="pct">${a.pct}%</span></span>
-      <div class="col"><span class="val" id="v${i}">—</span><span class="sub" id="s${i}"></span></div>
+      <span class="val" id="v${i}">—</span>
       <div class="bar"><i style="width:${a.pct * 4}%;background:${a.color}"></i></div>
+      <div class="stats" id="st${i}" hidden>
+        <span>已投 <span id="c${i}"></span></span>
+        <span>市值 <input id="m${i}" type="number" min="0" placeholder="未填"></span>
+        <span id="p${i}"></span>
+      </div>
     </div>`).join("");
 
   const input = document.getElementById("amount"), recBtn = document.getElementById("rec");
@@ -138,32 +194,61 @@
     });
   });
 
-  let recs = [];
+  let recs = [], mv = {};
   try { recs = JSON.parse(localStorage.dca) || []; } catch {}
+  try { mv = JSON.parse(localStorage.dcaMv) || {}; } catch {}
 
   function render() {
-    try { localStorage.dca = JSON.stringify(recs); } catch {}
+    try { localStorage.dca = JSON.stringify(recs); localStorage.dcaMv = JSON.stringify(mv); } catch {}
     const sums = {};
     recs.forEach(r => {
       const split = r.s || Object.fromEntries(assets.map(a => [a.name, r.v * a.pct / 100]));
       for (const k in split) sums[k] = (sums[k] || 0) + split[k];
     });
+    let totMv = 0, totPnl = 0, hasMv = false;
     assets.forEach((a, i) => {
-      document.getElementById("s" + i).textContent = sums[a.name] ? "已投 " + fmt(sums[a.name]) : "";
+      const cost = sums[a.name] || 0, m = mv[a.name];
+      document.getElementById("st" + i).hidden = !cost;
+      if (!cost) return;
+      document.getElementById("c" + i).textContent = fmt(cost);
+      const inp = document.getElementById("m" + i);
+      if (document.activeElement !== inp) inp.value = m ?? "";
+      document.getElementById("p" + i).innerHTML = m > 0 ? pnlHtml(m - cost, cost) : "";
+      if (m > 0) { totMv += m; totPnl += m - cost; hasMv = true; }
     });
     document.getElementById("cost").textContent = fmt(recs.reduce((s, r) => s + r.v, 0));
     document.getElementById("count").textContent = recs.length ? `共 ${recs.length} 次` : "暂无记录";
+    document.getElementById("mrow").hidden = document.getElementById("prow").hidden = !hasMv;
+    if (hasMv) {
+      document.getElementById("mkt").textContent = fmt(totMv);
+      document.getElementById("pnl").innerHTML = pnlHtml(totPnl, totMv - totPnl);
+    }
+    document.getElementById("histHead").hidden = !recs.length;
+    document.getElementById("histLabel").textContent = `历史记录 · ${recs.length} 条`;
     document.getElementById("hist").innerHTML = recs.map((r, i) => `
-      <div class="hrow">
-        <span>${new Date(r.t).toLocaleString("zh-CN", { dateStyle: "short", timeStyle: "short" })}</span>
+      <div class="hrow" title="${new Date(r.t).toLocaleString("zh-CN", { dateStyle: "short", timeStyle: "short" })}">
+        <span>${new Date(r.t).toLocaleDateString("zh-CN")}</span>
         <b>${fmt(r.v)}</b><a onclick="del(${i})" title="删除">×</a>
       </div>`).reverse().join("");
   }
   function del(i) { recs.splice(i, 1); render(); }
 
+  document.getElementById("histHead").addEventListener("click", e => {
+    e.currentTarget.classList.toggle("open");
+    document.getElementById("hist").classList.toggle("open");
+  });
+
+  assets.forEach((a, i) => {
+    document.getElementById("m" + i).addEventListener("input", e => {
+      const v = parseFloat(e.target.value);
+      if (v > 0) mv[a.name] = v; else delete mv[a.name];
+      render();
+    });
+  });
+
   recBtn.addEventListener("click", () => {
     const v = parseFloat(input.value);
-    recs.push({ t: Date.now(), v, s: Object.fromEntries(assets.map(a => [a.name, v * a.pct / 100])) });
+    recs.push({ t: Date.now(), v, s: Object.fromEntries(assets.map(a => [a.name, v * a.pct / 100])), m: { ...mv } });
     render();
   });
 
@@ -182,7 +267,12 @@
       try {
         const data = JSON.parse(fr.result);
         if (!Array.isArray(data) || data.some(r => typeof r.t !== "number" || typeof r.v !== "number")) throw 0;
-        if (!recs.length || confirm(`导入将覆盖当前 ${recs.length} 条记录，继续？`)) { recs = data; render(); }
+        if (!recs.length || confirm(`导入将覆盖当前 ${recs.length} 条记录，继续？`)) {
+          recs = data;
+          const last = recs[recs.length - 1];
+          if (last && last.m) mv = { ...last.m };
+          render();
+        }
       } catch { alert("文件格式不对，需要本工具导出的 JSON"); }
       file.value = "";
     };
