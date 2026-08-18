@@ -219,10 +219,9 @@
 <script>
   // base: 基准比例（动态调整围绕它进行）；src: [接口, 代码]；step: 每偏离多少调 1 个百分点
   const assets = [
-    { name: "S&P 500",    base: 30, color: "#7086f0", src: ["tx", "us.INX"],   step: 0.05 },
-    { name: "A500",       base: 20, color: "#e8705f", src: ["tx", "sh000510"], step: 0.05 },
-    { name: "恒生科技",    base: 15, color: "#9d8cf0", src: ["tx", "hkHSTECH"], step: 0.05 },
-    { name: "BTC",        base: 20, color: "#eda14f", src: ["bn", "BTCUSDT"],  step: 0.10 },
+    { name: "S&P 500",    base: 35, color: "#7086f0", src: ["tx", "us.INX"],   step: 0.05 },
+    { name: "A500",       base: 25, color: "#e8705f", src: ["tx", "sh000510"], step: 0.05 },
+    { name: "BTC",        base: 25, color: "#eda14f", src: ["bn", "BTCUSDT"],  step: 0.10 },
     { name: "黄金",        base: 15, color: "#d9b84a", src: ["tx", "sh518880"], step: 0.05 },
   ];
   const fmt = n => "¥ " + n.toLocaleString("zh-CN", { maximumFractionDigits: 2 });
