@@ -89,6 +89,10 @@
   .dev { display: inline-block; font-size: 11.5px; color: #a1a1aa; margin-left: 4px; white-space: nowrap; }
   .dev.hot { color: #e5484d; }
   .dev.cold { color: #10a267; }
+  .penote { grid-column: 1 / -1; font-size: 11.5px; color: #a1a1aa; }
+  .penote:empty { display: none; }
+  .penote.hot { color: #e5484d; font-weight: 600; }
+  .penote.cold { color: #10a267; }
   .sumline { margin-top: 10px; font-size: 12.5px; color: #a1a1aa; text-align: right; }
   .sumline.bad { color: #e5484d; font-weight: 500; }
   .val { font-size: 16px; font-weight: 600; font-variant-numeric: tabular-nums; }
@@ -217,12 +221,13 @@
   <input type="file" id="file" accept=".json" hidden>
 </div>
 <script>
-  // base: 基准比例（动态调整围绕它进行）；src: [接口, 代码]；step: 每偏离多少调 1 个百分点
+  // base: 基准比例；mode: fix=固定份额(吃残差) / pe=按手填PE分位估值定投 / ma=按200日均线偏离调节
+  // src: [接口, 代码]；step: 每偏离多少调 1 个百分点（仅 ma 用）
   const assets = [
-    { name: "S&P 500",    base: 35, color: "#7086f0", src: ["tx", "us.INX"],   step: 0.05 },
-    { name: "A500",       base: 25, color: "#e8705f", src: ["tx", "sh000510"], step: 0.05 },
-    { name: "BTC",        base: 25, color: "#eda14f", src: ["bn", "BTCUSDT"],  step: 0.10 },
-    { name: "黄金",        base: 15, color: "#d9b84a", src: ["tx", "sh518880"], step: 0.05 },
+    { name: "S&P 500",    base: 35, color: "#7086f0", src: ["tx", "us.INX"],   mode: "fix" },
+    { name: "A500",       base: 25, color: "#e8705f", src: ["tx", "sh000510"], mode: "pe" },
+    { name: "BTC",        base: 25, color: "#eda14f", src: ["bn", "BTCUSDT"],  mode: "ma", step: 0.10 },
+    { name: "黄金",        base: 15, color: "#d9b84a", src: ["tx", "sh518880"], mode: "ma", step: 0.05 },
   ];
   const fmt = n => "¥ " + n.toLocaleString("zh-CN", { maximumFractionDigits: 2 });
   let pcts = {};
@@ -231,6 +236,10 @@
   const prune = o => { for (const k in o) if (!assets.some(a => a.name === k)) delete o[k]; };
   prune(pcts);
   assets.forEach(a => { if (!(a.name in pcts)) pcts[a.name] = a.base; });
+  // A500 的 PE 历史分位（手填，估值 App 查询；建议用沪深300 近10年分位代理）
+  let peSt = null; // {v: 0-100, t: 填写时间戳}
+  try { peSt = JSON.parse(localStorage.dcaPe); } catch {}
+  if (!peSt || !isFinite(peSt.v)) peSt = null;
   const sumPct = () => assets.reduce((s, a) => s + pcts[a.name], 0);
   const pnlHtml = (d, base) =>
     `<b class="${d >= 0 ? "gain" : "loss"}">${d >= 0 ? "+" : "-"}${fmt(Math.abs(d))} (${d >= 0 ? "+" : "-"}${Math.abs(d / base * 100).toFixed(1)}%)</b>`;
@@ -238,9 +247,10 @@
   document.getElementById("list").innerHTML = assets.map((a, i) => `
     <div class="row">
       <span class="dot" style="background:${a.color}"></span>
-      <span class="name">${a.name} <span class="pchip"><input class="pctin" id="pc${i}" type="number" min="0" max="100" step="1" value="${pcts[a.name]}">%</span> <span class="dev" id="d${i}"></span></span>
+      <span class="name">${a.name} <span class="pchip"><input class="pctin" id="pc${i}" type="number" min="0" max="100" step="1" value="${pcts[a.name]}">%</span>${a.mode === "pe" ? ` <span class="pchip" title="PE 历史分位，估值 App 查询后填入">PE<input class="pctin" id="pe" type="number" min="0" max="100" step="1" value="${peSt ? peSt.v : ""}">%</span>` : ""} <span class="dev" id="d${i}"></span></span>
       <span class="val" id="v${i}">—</span>
-      <div class="bar"><i id="b${i}" style="background:${a.color}"></i></div>
+      <div class="bar"><i id="b${i}" style="background:${a.color}"></i></div>${a.mode === "pe" ? `
+      <div class="penote" id="penote"></div>` : ""}
       <div class="stats" id="st${i}" hidden>
         <span>已投 <span id="c${i}"></span></span>
         <span>市值 <input id="m${i}" type="number" min="0" placeholder="未填"></span>
@@ -264,6 +274,11 @@
   input.addEventListener("input", updateCalc);
 
   const fitPct = el => el.style.width = Math.max(el.value.length, 1) + "ch";
+  const syncPctInputs = () => assets.forEach((a, i) => {
+    const el = document.getElementById("pc" + i);
+    el.value = pcts[a.name];
+    fitPct(el);
+  });
   assets.forEach((a, i) => {
     const el = document.getElementById("pc" + i);
     fitPct(el);
@@ -275,6 +290,23 @@
     });
     el.addEventListener("change", () => { el.value = pcts[a.name]; fitPct(el); });
   });
+
+  // PE 分位输入：本地持久化；行情已加载时立即重算建议比例
+  const peEl = document.getElementById("pe");
+  if (peEl) {
+    fitPct(peEl);
+    peEl.addEventListener("input", () => {
+      const v = parseFloat(peEl.value);
+      peSt = isFinite(v) ? { v: Math.max(0, Math.min(100, v)), t: Date.now() } : null;
+      try { peSt ? localStorage.dcaPe = JSON.stringify(peSt) : localStorage.removeItem("dcaPe"); } catch {}
+      fitPct(peEl);
+      if (sugg) { sugg = suggest(); pcts = { ...sugg }; syncPctInputs(); }
+      renderDevs();
+      updateCalc();
+      render();
+    });
+    peEl.addEventListener("change", () => { peEl.value = peSt ? peSt.v : ""; fitPct(peEl); });
+  }
 
   let recs = [], mv = {};
   try { recs = JSON.parse(localStorage.dca) || []; } catch {}
@@ -373,11 +405,12 @@
       s: Object.fromEntries(assets.map(a => [a.name, v * pcts[a.name] / 100])),
       m: { ...mv },
       d: Object.fromEntries(assets.filter(a => devs[a.name] != null).map(a => [a.name, +(devs[a.name] * 100).toFixed(1)])),
+      pe: peSt?.v,
     });
     render();
   });
 
-  // ── 行情与动态比例：现价相对自身200日均线的偏离，涨多减配、跌多加配 ──
+  // ── 行情与三模型比例：BTC/黄金看200日均线偏离，A500 看手填 PE 分位，标普吃剩余份额 ──
   const BASES = assets.map(a => a.base).join("/");
   let devs = {}, sugg = null, klines = {};
 
@@ -450,19 +483,37 @@
   }
 
   function suggest() {
-    const prelim = assets.map(a => {
-      if (!a.base) return 0; // 停投资产不参与动态调整
+    // A500：PE 分位 >70 停投（份额按基准比例让给其余），<30 提到 40 个点（其余等比压缩），未填按基准
+    const peA = assets.find(a => a.mode === "pe" && a.base);
+    const pe = peA && peSt ? peSt.v : null;
+    let aShare = peA ? peA.base : 0;
+    if (pe != null && pe > 70) aShare = 0;
+    else if (pe != null && pe < 30) aShare = 40;
+    const others = assets.filter(a => a.base && a !== peA);
+    const obSum = others.reduce((s, a) => s + a.base, 0);
+    const scale = obSum ? (100 - aShare) / obSum : 0; // 其余资产的有效基准 = base × scale
+    // BTC/黄金在有效基准上做均线偏离加减；标普不看自身均线，吃剩余份额（吸收 BTC/黄金 的加减）
+    const prelim = {};
+    let maSum = 0, fixSum = 0;
+    others.forEach(a => {
+      const e = a.base * scale;
+      if (a.mode !== "ma") { fixSum += e; return; }
       const d = devs[a.name];
       let tilt = 0;
       if (d != null) {
         const r = -d / a.step;
         tilt = Math.sign(r) * Math.min(3, Math.round(Math.abs(r)));
       }
-      return Math.max(a.base + tilt, 1);
+      maSum += prelim[a.name] = Math.max(e + tilt, 1);
     });
-    const sum = prelim.reduce((s, x) => s + x, 0);
-    // 最大余数法缩放到合计恰为 100 的整数
-    const exact = prelim.map(x => x * 100 / sum);
+    const rest = 100 - aShare - maSum;
+    const exact = assets.map(a => {
+      if (!a.base) return 0; // 停投资产不参与
+      if (a === peA) return aShare;
+      if (a.mode === "ma") return fixSum ? prelim[a.name] : prelim[a.name] * (100 - aShare) / maSum;
+      return rest * a.base * scale / fixSum;
+    });
+    // 最大余数法取整到合计恰为 100
     const out = exact.map(Math.floor);
     const left = 100 - out.reduce((s, x) => s + x, 0);
     exact.map((x, i) => ({ i, f: x - out[i] }))
@@ -472,9 +523,28 @@
     return Object.fromEntries(assets.map((a, i) => [a.name, out[i]]));
   }
 
+  // A500 的估值状态行
+  function renderPeNote() {
+    const note = document.getElementById("penote"), a = assets.find(x => x.mode === "pe");
+    if (!note) return;
+    if (!peSt) {
+      note.className = "penote";
+      note.textContent = "请填写 PE 历史分位（建议用沪深300 近10年分位代理，韭圈儿/雪球可查），未填按基准定投";
+      return;
+    }
+    const dt = new Date(peSt.t), days = Math.floor((Date.now() - peSt.t) / 864e5);
+    const when = `${dt.getMonth() + 1}-${String(dt.getDate()).padStart(2, "0")} 填写${days > 30 ? ` · 已 ${days} 天建议更新` : ""}`;
+    const chg = sugg && a && sugg[a.name] !== a.base ? ` · ${a.base}→${sugg[a.name]}` : "";
+    if (peSt.v > 70) { note.className = "penote hot"; note.textContent = `⚠ PE 分位 ${peSt.v}% 高估：本期停买，建议分批卖出换入其他资产${chg} · ${when}`; }
+    else if (peSt.v < 30) { note.className = "penote cold"; note.textContent = `PE 分位 ${peSt.v}% 低估：加投至 40%${chg} · ${when}`; }
+    else { note.className = "penote"; note.textContent = `PE 分位 ${peSt.v}% 正常区间，按基准定投${chg} · ${when}`; }
+  }
+
   function renderDevs() {
+    renderPeNote();
     assets.forEach((a, i) => {
       const el = document.getElementById("d" + i), d = devs[a.name];
+      if (a.mode === "pe") { el.textContent = ""; el.className = "dev"; return; } // A500 状态见 penote
       if (d == null) {
         el.className = "dev";
         el.textContent = a.name in devs ? "行情未获取" : "";
@@ -507,11 +577,7 @@
     if (ok) {
       sugg = suggest();
       pcts = { ...sugg };
-      assets.forEach((a, i) => {
-        const el = document.getElementById("pc" + i);
-        el.value = pcts[a.name];
-        fitPct(el);
-      });
+      syncPctInputs();
       msg = ok === assets.length ? `已按行情调整 · 基准 ${BASES}` : `已按行情调整（${assets.length - ok} 项行情未获取，按基准）`;
     } else {
       sugg = null;
@@ -547,11 +613,7 @@
           if (last && last.p) {
             pcts = { ...pcts, ...last.p };
             prune(pcts);
-            assets.forEach((a, i) => {
-              const el = document.getElementById("pc" + i);
-              el.value = pcts[a.name];
-              fitPct(el);
-            });
+            syncPctInputs();
           }
           updateCalc();
           render();
