@@ -272,7 +272,6 @@
         <span>市值 <input id="m${i}" type="number" min="0" placeholder="未填"><a class="sellbtn" id="sb${i}" title="记录卖出">卖</a></span>
         <span class="sellbox" id="sx${i}" hidden>卖出 <input id="sv${i}" type="number" min="0" placeholder="金额"><a id="sc${i}" title="确认">✓</a><a id="sq${i}" title="取消">×</a></span>
         <span id="rz${i}"></span>
-        <span id="w${i}"></span>
         <span id="p${i}"></span>
       </div>
     </div>`).join("");
@@ -362,29 +361,20 @@
       localStorage.dcaPct = JSON.stringify(pcts);
     } catch {}
     const { cost: sums, realized, relieved, sellInfo } = replay();
-    let totMv = 0, totPnl = 0, hasMv = false;
+    // 只要还有成本、已实现收益或市值任一项就展示该行：清仓后成本归零，但已实现收益仍需可见
+    let totMv = 0, totPnl = 0, totBase = 0, hasMv = false;
     assets.forEach((a, i) => {
-      const cost = sums[a.name] || 0, m = mv[a.name];
-      document.getElementById("st" + i).hidden = !cost;
-      if (!cost) return;
-      document.getElementById("c" + i).textContent = fmt(cost);
+      const cost = sums[a.name] || 0, m = mv[a.name], rz = realized[a.name] || 0;
+      document.getElementById("st" + i).hidden = !(cost > 0 || rz || m > 0);
+      if (cost <= 0 && !rz && !(m > 0)) return;
+      document.getElementById("c" + i).textContent = cost > 0 ? fmt(cost) : rz ? "已清仓" : "—";
       const inp = document.getElementById("m" + i);
       if (document.activeElement !== inp) inp.value = m ?? "";
-      const rz = realized[a.name];
       document.getElementById("rz" + i).innerHTML =
         rz ? `已实现 <span class="${rz >= 0 ? "gain" : "loss"}">${rz >= 0 ? "+" : "-"}${fmt(Math.abs(rz))}</span>` : "";
-      document.getElementById("p" + i).innerHTML = m > 0 ? pnlHtml(m - cost, cost) : "";
-      if (m > 0) { totMv += m; totPnl += m - cost; hasMv = true; }
-    });
-    // 持仓占比 vs 基准目标（目标按已填市值的资产归一化），偏离≥5个点标红
-    const mvBaseSum = assets.reduce((s, a) => s + (mv[a.name] > 0 ? a.base : 0), 0);
-    assets.forEach((a, i) => {
-      const m = mv[a.name], el = document.getElementById("w" + i);
-      if (!(m > 0) || !totMv || !mvBaseSum) { el.textContent = ""; return; }
-      const share = m / totMv * 100, target = a.base / mvBaseSum * 100;
-      // 停投资产只展示占比，不设目标、不告警
-      el.textContent = a.base ? `占 ${share.toFixed(0)}% · 目标 ${target.toFixed(0)}%` : `占 ${share.toFixed(0)}%`;
-      el.className = a.base && Math.abs(share - target) >= 5 ? "warn" : "";
+      // 有市值却无成本记录（删过买入 / 导入残缺 / 建仓早于本工具）：计入总市值但不参与收益率
+      document.getElementById("p" + i).innerHTML = m > 0 ? (cost > 0 ? pnlHtml(m - cost, cost) : `<span class="warn">无成本记录</span>`) : "";
+      if (m > 0) { totMv += m; hasMv = true; if (cost > 0) { totPnl += m - cost; totBase += cost; } }
     });
     const rows = document.querySelectorAll("#list .row");
     assets.map((a, i) => {
@@ -404,11 +394,10 @@
       const late = days > Math.max(med * 1.5, 7);
       countEl.innerHTML = `共 ${buys.length} 次 · <span class="${late ? "warn" : ""}">距上次 ${days} 天</span>`;
     } else countEl.textContent = "暂无记录";
-    document.getElementById("mrow").hidden = document.getElementById("prow").hidden = !hasMv;
-    if (hasMv) {
-      document.getElementById("mkt").textContent = fmt(totMv);
-      document.getElementById("pnl").innerHTML = pnlHtml(totPnl, totMv - totPnl);
-    }
+    document.getElementById("mrow").hidden = !hasMv;
+    document.getElementById("prow").hidden = !(totBase > 0);
+    if (hasMv) document.getElementById("mkt").textContent = fmt(totMv);
+    if (totBase > 0) document.getElementById("pnl").innerHTML = pnlHtml(totPnl, totBase);
     const totRz = Object.values(realized).reduce((s, x) => s + x, 0);
     const totRel = Object.values(relieved).reduce((s, x) => s + x, 0);
     document.getElementById("rrow").hidden = !sellInfo.size;
@@ -515,25 +504,20 @@
     const [api, code] = a.src, signal = AbortSignal.timeout(10000);
     let rows, ci, dateOf;
     if (api === "bn") {
-      rows = await (await fetch(`https://api.binance.com/api/v3/klines?symbol=${code}&interval=1d&limit=220`, { signal })).json();
+      rows = await (await fetch(`https://api.binance.com/api/v3/klines?symbol=${code}&interval=1d&limit=500`, { signal })).json();
       ci = 4;
       dateOf = r => new Date(r[0]).toISOString().slice(0, 10);
     } else {
-      const d = (await (await fetch(`https://web.ifzq.gtimg.cn/appstock/app/fqkline/get?param=${code},day,,,320,qfq`, { signal })).json()).data[code];
+      const d = (await (await fetch(`https://web.ifzq.gtimg.cn/appstock/app/fqkline/get?param=${code},day,,,500,qfq`, { signal })).json()).data[code];
       rows = d.day || d.qfqday;
       ci = 2;
       dateOf = r => r[0];
     }
     const raw = rows.map(r => [dateOf(r), parseFloat(r[ci])]).filter(p => isFinite(p[1]) && p[1] > 0);
-    // 盘中最后一根K线偶见错乱数据：与上一保留值跳变超35%的行丢弃
-    const seed = raw.slice(0, 10).map(p => p[1]).sort((x, y) => x - y);
-    let prev = seed[Math.floor(seed.length / 2)];
-    const pairs = [];
-    for (const p of raw) {
-      if (Math.abs(p[1] / prev - 1) > 0.35) continue;
-      pairs.push(p);
-      prev = p[1];
-    }
+    // 偶见错乱K线（多为盘中最后一根）：与前 5 根「原始」收盘中位数偏离超 35% 的丢弃。
+    // 基准取原始值而非已保留值：真实暴跌只误删 2-3 根便自动跟上，不会像逐根链式比较那样整段误杀。
+    const med5 = i => raw.slice(i - 5, i).map(p => p[1]).sort((x, y) => x - y)[2];
+    const pairs = raw.filter((p, i) => i < 5 || Math.abs(p[1] / med5(i) - 1) <= 0.35);
     if (pairs.length < 200) throw new Error(code);
     return pairs;
   }
@@ -556,6 +540,8 @@
       el.innerHTML = `<div class="hrow">复盘需要全部资产行情（缺 ${missing.join("、")}）</div>`;
       return;
     }
+    // 可复盘起点 = 各资产行情起点里最晚的那个（BTC 500 根≈16 个月，A500 指数 2024-09 才发布）
+    const from = assets.map(a => klines[a.name][0][0]).sort().pop();
     let dyn = 0, fix = 0, used = 0, skipped = 0;
     for (const r of recs) {
       if (r.type === "sell") continue; // 复盘只对比买入策略
@@ -576,8 +562,8 @@
       <div class="hrow"><span>动态比例买入现值</span><b>${fmt(dyn)}</b></div>
       <div class="hrow"><span>固定基准买入现值</span><b>${fmt(fix)}</b></div>
       <div class="hrow"><span>动态 − 固定</span>${pnlHtml(diff, fix)}</div>
-      <div class="hrow"><span>计入 ${used} 笔买入${skipped ? ` · ${skipped} 笔超出行情范围未计` : ""}${recs.some(r => r.type === "sell") ? " · 卖出不参与对比" : ""} · 按指数近似，不含费率/汇率</span></div>`
-      : `<div class="hrow">记录都超出行情数据范围（约近一年内可复盘）</div>`;
+      <div class="hrow"><span>计入 ${used} 笔买入${skipped ? ` · ${skipped} 笔早于 ${from} 未计` : ""}${recs.some(r => r.type === "sell") ? " · 卖出不参与对比" : ""} · 按指数近似，不含费率/汇率</span></div>`
+      : `<div class="hrow">记录都早于行情起点（${from} 起可复盘）</div>`;
   }
 
   function suggest() {
