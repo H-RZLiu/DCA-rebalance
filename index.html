@@ -198,6 +198,21 @@
   .io { display: flex; justify-content: center; gap: 24px; margin-top: 20px; font-size: 13px; color: #a1a1aa; }
   .io a { cursor: pointer; }
   .io a:hover { color: #18181b; }
+  .sellbtn {
+    font-size: 11.5px;
+    color: #a1a1aa;
+    border: 1px solid #e4e4e7;
+    border-radius: 6px;
+    padding: 1px 6px;
+    cursor: pointer;
+    margin-left: 4px;
+  }
+  .sellbtn:hover { color: #18181b; border-color: #18181b; }
+  .sellbox[hidden] { display: none; }
+  .sellbox a { cursor: pointer; padding: 0 4px; color: #a1a1aa; }
+  .sellbox a:hover { color: #18181b; }
+  .hrow .selltag { color: #d97706; font-weight: 600; }
+  .hrow .sellsub { font-size: 12px; }
 </style>
 </head>
 <body>
@@ -211,7 +226,8 @@
   <div class="total">
     <div class="trow"><span>总成本 <span class="pct" id="count"></span></span><b id="cost">¥ 0</b></div>
     <div class="trow" id="mrow" hidden><span>总市值</span><b id="mkt"></b></div>
-    <div class="trow" id="prow" hidden><span>总收益</span><b id="pnl"></b></div>
+    <div class="trow" id="prow" hidden><span>持仓收益</span><b id="pnl"></b></div>
+    <div class="trow" id="rrow" hidden><span>已实现收益</span><b id="rpnl"></b></div>
   </div>
   <div class="hist-head" id="histHead" hidden><span id="histLabel">历史记录</span><i>▾</i></div>
   <div id="hist"></div>
@@ -252,8 +268,10 @@
       <div class="bar"><i id="b${i}" style="background:${a.color}"></i></div>${a.mode === "pe" ? `
       <div class="penote" id="penote"></div>` : ""}
       <div class="stats" id="st${i}" hidden>
-        <span>已投 <span id="c${i}"></span></span>
-        <span>市值 <input id="m${i}" type="number" min="0" placeholder="未填"></span>
+        <span>成本 <span id="c${i}"></span></span>
+        <span>市值 <input id="m${i}" type="number" min="0" placeholder="未填"><a class="sellbtn" id="sb${i}" title="记录卖出">卖</a></span>
+        <span class="sellbox" id="sx${i}" hidden>卖出 <input id="sv${i}" type="number" min="0" placeholder="金额"><a id="sc${i}" title="确认">✓</a><a id="sq${i}" title="取消">×</a></span>
+        <span id="rz${i}"></span>
         <span id="w${i}"></span>
         <span id="p${i}"></span>
       </div>
@@ -313,18 +331,37 @@
   try { mv = JSON.parse(localStorage.dcaMv) || {}; } catch {}
   prune(mv);
 
+  // 按时间顺序重放全部记录：买入累加成本，卖出按「成本/卖出前市值」比例结转成本
+  // 返回按资产名的 成本/已实现收益/累计结转成本 map，及供历史列表逐行展示的 sellInfo
+  function replay() {
+    const cost = {}, realized = {}, relieved = {}, sellInfo = new Map();
+    const order = [...recs.keys()].sort((a, b) => recs[a].t - recs[b].t);
+    for (const i of order) {
+      const r = recs[i];
+      if (r.type === "sell") {
+        const c = cost[r.name] || 0, preMv = r.m?.[r.name];
+        const ratio = preMv > 0 ? c / preMv : 1; // 快照缺失退化为按成本结转
+        const rel = Math.min(r.v * ratio, c);    // 结转不超过剩余成本
+        cost[r.name] = Math.max(c - rel, 0);
+        realized[r.name] = (realized[r.name] || 0) + (r.v - rel);
+        relieved[r.name] = (relieved[r.name] || 0) + rel;
+        sellInfo.set(i, { relieved: rel, gain: r.v - rel });
+      } else {
+        const p = r.p || pcts;
+        const split = r.s || Object.fromEntries(assets.map(a => [a.name, r.v * (p[a.name] || 0) / 100]));
+        for (const k in split) cost[k] = (cost[k] || 0) + split[k];
+      }
+    }
+    return { cost, realized, relieved, sellInfo };
+  }
+
   function render() {
     try {
       localStorage.dca = JSON.stringify(recs);
       localStorage.dcaMv = JSON.stringify(mv);
       localStorage.dcaPct = JSON.stringify(pcts);
     } catch {}
-    const sums = {};
-    recs.forEach(r => {
-      const p = r.p || pcts;
-      const split = r.s || Object.fromEntries(assets.map(a => [a.name, r.v * (p[a.name] || 0) / 100]));
-      for (const k in split) sums[k] = (sums[k] || 0) + split[k];
-    });
+    const { cost: sums, realized, relieved, sellInfo } = replay();
     let totMv = 0, totPnl = 0, hasMv = false;
     assets.forEach((a, i) => {
       const cost = sums[a.name] || 0, m = mv[a.name];
@@ -333,6 +370,9 @@
       document.getElementById("c" + i).textContent = fmt(cost);
       const inp = document.getElementById("m" + i);
       if (document.activeElement !== inp) inp.value = m ?? "";
+      const rz = realized[a.name];
+      document.getElementById("rz" + i).innerHTML =
+        rz ? `已实现 <span class="${rz >= 0 ? "gain" : "loss"}">${rz >= 0 ? "+" : "-"}${fmt(Math.abs(rz))}</span>` : "";
       document.getElementById("p" + i).innerHTML = m > 0 ? pnlHtml(m - cost, cost) : "";
       if (m > 0) { totMv += m; totPnl += m - cost; hasMv = true; }
     });
@@ -352,30 +392,50 @@
       return { i, y: m > 0 && cost > 0 ? (m - cost) / cost : -Infinity };
     }).sort((a, b) => b.y - a.y || a.i - b.i)
       .forEach((r, pos) => rows[r.i].style.order = pos);
-    document.getElementById("cost").textContent = fmt(recs.reduce((s, r) => s + r.v, 0));
-    // 定投节奏：距上次天数，超过历史中位间隔的1.5倍标红
+    document.getElementById("cost").textContent = fmt(Object.values(sums).reduce((s, x) => s + x, 0));
+    // 定投节奏：距上次天数，超过历史中位间隔的1.5倍标红（只算买入，卖出不重置节奏）
     const countEl = document.getElementById("count");
-    if (recs.length) {
-      const times = recs.map(r => r.t).sort((a, b) => a - b);
+    const buys = recs.filter(r => r.type !== "sell");
+    if (buys.length) {
+      const times = buys.map(r => r.t).sort((a, b) => a - b);
       const days = Math.floor((Date.now() - times[times.length - 1]) / 864e5);
       const gaps = times.slice(1).map((t, i) => (t - times[i]) / 864e5).filter(g => g >= 1).sort((a, b) => a - b);
       const med = gaps.length ? gaps[Math.floor(gaps.length / 2)] : 30;
       const late = days > Math.max(med * 1.5, 7);
-      countEl.innerHTML = `共 ${recs.length} 次 · <span class="${late ? "warn" : ""}">距上次 ${days} 天</span>`;
+      countEl.innerHTML = `共 ${buys.length} 次 · <span class="${late ? "warn" : ""}">距上次 ${days} 天</span>`;
     } else countEl.textContent = "暂无记录";
     document.getElementById("mrow").hidden = document.getElementById("prow").hidden = !hasMv;
     if (hasMv) {
       document.getElementById("mkt").textContent = fmt(totMv);
       document.getElementById("pnl").innerHTML = pnlHtml(totPnl, totMv - totPnl);
     }
+    const totRz = Object.values(realized).reduce((s, x) => s + x, 0);
+    const totRel = Object.values(relieved).reduce((s, x) => s + x, 0);
+    document.getElementById("rrow").hidden = !sellInfo.size;
+    if (sellInfo.size) document.getElementById("rpnl").innerHTML = totRel > 0
+      ? pnlHtml(totRz, totRel)
+      : `<b class="${totRz >= 0 ? "gain" : "loss"}">${totRz >= 0 ? "+" : "-"}${fmt(Math.abs(totRz))}</b>`;
     document.getElementById("histHead").hidden = !recs.length;
     document.getElementById("rvHead").hidden = !recs.length;
     document.getElementById("histLabel").textContent = `历史记录 · ${recs.length} 条`;
-    document.getElementById("hist").innerHTML = recs.map((r, i) => `
-      <div class="hrow" title="${new Date(r.t).toLocaleString("zh-CN", { dateStyle: "short", timeStyle: "short" })}">
+    document.getElementById("hist").innerHTML = recs.map((r, i) => {
+      const title = new Date(r.t).toLocaleString("zh-CN", { dateStyle: "short", timeStyle: "short" });
+      if (r.type === "sell") {
+        const s = sellInfo.get(i), g = s.gain;
+        const pct = s.relieved > 0 ? ` (${g >= 0 ? "+" : "-"}${Math.abs(g / s.relieved * 100).toFixed(1)}%)` : "";
+        return `
+      <div class="hrow" title="${title}">
+        <span>${new Date(r.t).toLocaleDateString("zh-CN")} <span class="selltag">卖出</span> ${r.name}</span>
+        <span class="sellsub">结转 ${fmt(s.relieved)} · <span class="${g >= 0 ? "gain" : "loss"}">${g >= 0 ? "+" : "-"}${fmt(Math.abs(g))}${pct}</span></span>
+        <b>${fmt(r.v)}</b><a onclick="del(${i})" title="删除">×</a>
+      </div>`;
+      }
+      return `
+      <div class="hrow" title="${title}">
         <span>${new Date(r.t).toLocaleDateString("zh-CN")}</span>
         <b>${fmt(r.v)}</b><a onclick="del(${i})" title="删除">×</a>
-      </div>`).reverse().join("");
+      </div>`;
+    }).reverse().join("");
   }
   function del(i) { recs.splice(i, 1); render(); }
 
@@ -394,6 +454,43 @@
       const v = parseFloat(e.target.value);
       if (v > 0) mv[a.name] = v; else delete mv[a.name];
       render();
+    });
+  });
+
+  // ── 卖出：行内展开金额输入，确认后记一笔 sell 并自动扣减该资产市值 ──
+  function toggleSell(i, show) {
+    document.getElementById("sx" + i).hidden = !show;
+    document.getElementById("sb" + i).style.display = show ? "none" : "";
+    const sv = document.getElementById("sv" + i);
+    sv.value = "";
+    if (show) sv.focus();
+  }
+  function confirmSell(a, i) {
+    const v = parseFloat(document.getElementById("sv" + i).value), preMv = mv[a.name];
+    if (!(v > 0)) return;
+    if (!(preMv > 0)) { alert("请先填写该资产当前市值再记录卖出"); toggleSell(i, false); return; }
+    if (v > preMv) { alert(`卖出金额不能超过当前市值 ${fmt(preMv)}`); return; }
+    recs.push({
+      t: Date.now(), type: "sell", name: a.name, v,
+      m: { ...mv },
+      d: Object.fromEntries(assets.filter(x => devs[x.name] != null).map(x => [x.name, +(devs[x.name] * 100).toFixed(1)])),
+      pe: peSt?.v,
+    });
+    const rem = preMv - v;
+    if (rem > 0) mv[a.name] = rem; else delete mv[a.name];
+    toggleSell(i, false);
+    render();
+  }
+  assets.forEach((a, i) => {
+    document.getElementById("sb" + i).onclick = () => {
+      if (!(mv[a.name] > 0)) { alert("请先填写该资产当前市值再记录卖出"); return; }
+      toggleSell(i, true);
+    };
+    document.getElementById("sq" + i).onclick = () => toggleSell(i, false);
+    document.getElementById("sc" + i).onclick = () => confirmSell(a, i);
+    document.getElementById("sv" + i).addEventListener("keydown", e => {
+      if (e.key === "Enter") confirmSell(a, i);
+      if (e.key === "Escape") toggleSell(i, false);
     });
   });
 
@@ -461,6 +558,7 @@
     }
     let dyn = 0, fix = 0, used = 0, skipped = 0;
     for (const r of recs) {
+      if (r.type === "sell") continue; // 复盘只对比买入策略
       const p = r.p || pcts;
       const split = r.s || Object.fromEntries(assets.map(a => [a.name, r.v * (p[a.name] || 0) / 100]));
       if (assets.some(a => !(priceAt(a.name, r.t) > 0))) { skipped++; continue; }
@@ -478,7 +576,7 @@
       <div class="hrow"><span>动态比例买入现值</span><b>${fmt(dyn)}</b></div>
       <div class="hrow"><span>固定基准买入现值</span><b>${fmt(fix)}</b></div>
       <div class="hrow"><span>动态 − 固定</span>${pnlHtml(diff, fix)}</div>
-      <div class="hrow"><span>计入 ${used} 笔${skipped ? ` · ${skipped} 笔超出行情范围未计` : ""} · 按指数近似，不含费率/汇率</span></div>`
+      <div class="hrow"><span>计入 ${used} 笔买入${skipped ? ` · ${skipped} 笔超出行情范围未计` : ""}${recs.some(r => r.type === "sell") ? " · 卖出不参与对比" : ""} · 按指数近似，不含费率/汇率</span></div>`
       : `<div class="hrow">记录都超出行情数据范围（约近一年内可复盘）</div>`;
   }
 
@@ -609,9 +707,17 @@
         if (!recs.length || confirm(`导入将覆盖当前 ${recs.length} 条记录，继续？`)) {
           recs = data;
           const last = recs[recs.length - 1];
-          if (last && last.m) { mv = { ...last.m }; prune(mv); }
-          if (last && last.p) {
-            pcts = { ...pcts, ...last.p };
+          if (last && last.m) {
+            mv = { ...last.m };
+            if (last.type === "sell") { // 卖出记录的 m 是卖出前快照，扣掉卖出金额
+              const rem = (mv[last.name] || 0) - last.v;
+              if (rem > 0) mv[last.name] = rem; else delete mv[last.name];
+            }
+            prune(mv);
+          }
+          const lastP = [...recs].reverse().find(r => r.p); // 卖出记录无 p，回退到最近一条买入
+          if (lastP) {
+            pcts = { ...pcts, ...lastP.p };
             prune(pcts);
             syncPctInputs();
           }
